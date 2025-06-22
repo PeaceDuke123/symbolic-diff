@@ -1,194 +1,271 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
+import re
 
-# C extensions
-*.so
+class Expr:
+    def diff(self):
+        raise NotImplementedError()
+    def simplify(self):
+        return self
+    def __str__(self):
+        raise NotImplementedError()
 
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
+class Const(Expr):
+    def __init__(self, value):
+        self.value = value
+    def diff(self):
+        return Const(0)
+    def simplify(self):
+        return self
+    def __str__(self):
+        return str(self.value)
 
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
-*.spec
+class Var(Expr):
+    def __init__(self, name):
+        self.name = name
+    def diff(self):
+        return Const(1)
+    def __str__(self):
+        return self.name
 
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
+class Add(Expr):
+    def __init__(self, left, right):
+        self.left = left
+        self.right = right
+    def diff(self):
+        return Add(self.left.diff(), self.right.diff())
+    def simplify(self):
+        left = self.left.simplify()
+        right = self.right.simplify()
+        if isinstance(left, Const) and left.value == 0:
+            return right
+        if isinstance(right, Const) and right.value == 0:
+            return left
+        if isinstance(left, Const) and isinstance(right, Const):
+            return Const(left.value + right.value)
+        return Add(left, right)
+    def __str__(self):
+        return f"({self.left} + {self.right})"
 
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
-cover/
+class Sub(Expr):
+    def __init__(self, left, right):
+        self.left = left
+        self.right = right
+    def diff(self):
+        return Sub(self.left.diff(), self.right.diff())
+    def simplify(self):
+        left = self.left.simplify()
+        right = self.right.simplify()
+        if isinstance(right, Const) and right.value == 0:
+            return left
+        if isinstance(left, Const) and isinstance(right, Const):
+            return Const(left.value - right.value)
+        return Sub(left, right)
+    def __str__(self):
+        return f"({self.left} - {self.right})"
 
-# Translations
-*.mo
-*.pot
+class Mul(Expr):
+    def __init__(self, left, right):
+        self.left = left
+        self.right = right
+    def diff(self):
+        return Add(Mul(self.left.diff(), self.right), Mul(self.left, self.right.diff()))
+    def simplify(self):
+        left = self.left.simplify()
+        right = self.right.simplify()
+        if isinstance(left, Const) and left.value == 0 or isinstance(right, Const) and right.value == 0:
+            return Const(0)
+        if isinstance(left, Const) and left.value == 1:
+            return right
+        if isinstance(right, Const) and right.value == 1:
+            return left
+        if isinstance(left, Const) and isinstance(right, Const):
+            return Const(left.value * right.value)
+        return Mul(left, right)
+    def __str__(self):
+        return f"({self.left} * {self.right})"
 
-# Django stuff:
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
+class Div(Expr):
+    def __init__(self, numerator, denominator):
+        self.numerator = numerator
+        self.denominator = denominator
+    def diff(self):
+        u = self.numerator
+        v = self.denominator
+        return Div(Sub(Mul(u.diff(), v), Mul(u, v.diff())), Pow(v, Const(2)))
+    def simplify(self):
+        num = self.numerator.simplify()
+        den = self.denominator.simplify()
+        if isinstance(num, Const) and num.value == 0:
+            return Const(0)
+        if isinstance(den, Const) and den.value == 1:
+            return num
+        return Div(num, den)
+    def __str__(self):
+        return f"({self.numerator} / {self.denominator})"
 
-# Flask stuff:
-instance/
-.webassets-cache
+class Pow(Expr):
+    def __init__(self, base, exp):
+        self.base = base
+        self.exp = exp
+    def diff(self):
+        if isinstance(self.exp, Const):
+            return Mul(Const(self.exp.value),
+                       Mul(Pow(self.base, Const(self.exp.value - 1)), self.base.diff()))
+        else:
+            # Общая формула для u^v: u^v * (v' * ln(u) + v * u'/u)
+            return Mul(Pow(self.base, self.exp),
+                       Add(Mul(self.exp.diff(), Ln(self.base)),
+                           Mul(self.exp, Div(self.base.diff(), self.base))))
+    def simplify(self):
+        base = self.base.simplify()
+        exp = self.exp.simplify()
+        if isinstance(exp, Const):
+            if exp.value == 0:
+                return Const(1)
+            if exp.value == 1:
+                return base
+        return Pow(base, exp)
+    def __str__(self):
+        return f"({self.base}^{self.exp})"
 
-# Scrapy stuff:
-.scrapy
+# === Синус ===
+class Sin(Expr):
+    def __init__(self, arg):
+        self.arg = arg
+    def diff(self):
+        return Mul(Cos(self.arg), self.arg.diff())
+    def simplify(self):
+        arg = self.arg.simplify()
+        return Sin(arg)
+    def __str__(self):
+        return f"sin({self.arg})"
 
-# Sphinx documentation
-docs/_build/
+class Cos(Expr):
+    def __init__(self, arg):
+        self.arg = arg
+    def diff(self):
+        return Mul(Const(-1), Mul(Sin(self.arg), self.arg.diff()))
+    def simplify(self):
+        arg = self.arg.simplify()
+        return Cos(arg)
+    def __str__(self):
+        return f"cos({self.arg})"
 
-# PyBuilder
-.pybuilder/
-target/
+class Exp(Expr):
+    def __init__(self, arg):
+        self.arg = arg
+    def diff(self):
+        return Mul(Exp(self.arg), self.arg.diff())
+    def simplify(self):
+        return Exp(self.arg.simplify())
+    def __str__(self):
+        return f"exp({self.arg})"
 
-# Jupyter Notebook
-.ipynb_checkpoints
+class Ln(Expr):
+    def __init__(self, arg):
+        self.arg = arg
+    def diff(self):
+        return Div(self.arg.diff(), self.arg)
+    def simplify(self):
+        return Ln(self.arg.simplify())
+    def __str__(self):
+        return f"ln({self.arg})"
 
-# IPython
-profile_default/
-ipython_config.py
+def tokenize(expr):
+    expr = expr.replace(' ', '')
+    return re.findall(r'\d+\.?\d*|[a-zA-Z_]+|[\+\-\*\/\^\(\)]', expr)
 
-# pyenv
-#   For a library or package, you might want to ignore these files since the code is
-#   intended to run in multiple environments; otherwise, check them in:
-# .python-version
+def parse(tokens):
+    def parse_expression(index=0, min_prec=0):
+        def parse_atom(i):
+            token = tokens[i]
+            if token == '(':
+                node, j = parse_expression(i + 1)
+                if tokens[j] != ')':
+                    raise SyntaxError("Ожидалась ')'")
+                return node, j + 1
+            elif re.match(r'\d+\.?\d*', token):
+                return Const(float(token) if '.' in token else int(token)), i + 1
+            elif re.match(r'[a-zA-Z_]+', token):
+                if i + 1 < len(tokens) and tokens[i + 1] == '(':
+                    arg, j = parse_expression(i + 2)
+                    if tokens[j] != ')':
+                        raise SyntaxError("Ожидалась ')' после функции")
+                    if token == 'sin':
+                        return Sin(arg), j + 1
+                    elif token == 'cos':
+                        return Cos(arg), j + 1
+                    elif token == 'exp':
+                        return Exp(arg), j + 1
+                    elif token == 'ln':
+                        return Ln(arg), j + 1
+                    else:
+                        raise ValueError(f"Неизвестная функция: {token}")
+                else:
+                    return Var(token), i + 1
+            elif token == '-':
+                node, j = parse_atom(i + 1)
+                return Mul(Const(-1), node), j
+            else:
+                raise SyntaxError(f"Неожиданный токен: {token}")
 
-# pipenv
-#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
-#   However, in case of collaboration, if having platform-specific dependencies or dependencies
-#   having no cross-platform support, pipenv may install dependencies that don't work, or not
-#   install all needed dependencies.
-#Pipfile.lock
+        node, i = parse_atom(index)
 
-# UV
-#   Similar to Pipfile.lock, it is generally recommended to include uv.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#uv.lock
+        while i < len(tokens):
+            op = tokens[i]
+            prec = {'+': 1, '-': 1, '*': 2, '/': 2, '^': 3}.get(op)
+            if prec is None or prec < min_prec:
+                break
+            i += 1
+            rhs, j = parse_expression(i, prec + (0 if op == '^' else 1))
+            if op == '+':
+                node = Add(node, rhs)
+            elif op == '-':
+                node = Sub(node, rhs)
+            elif op == '*':
+                node = Mul(node, rhs)
+            elif op == '/':
+                node = Div(node, rhs)
+            elif op == '^':
+                node = Pow(node, rhs)
+            i = j
+        return node, i
 
-# poetry
-#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
-#poetry.lock
+    tree, pos = parse_expression()
+    if pos != len(tokens):
+        raise SyntaxError("Лишние токены в конце")
+    return tree
 
-# pdm
-#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
-#pdm.lock
-#   pdm stores project-wide configurations in .pdm.toml, but it is recommended to not include it
-#   in version control.
-#   https://pdm.fming.dev/latest/usage/project/#working-with-version-control
-.pdm.toml
-.pdm-python
-.pdm-build/
+def print_tree(expr, indent=""):
+    if isinstance(expr, (Const, Var)):
+        print(indent + str(expr))
+    else:
+        print(indent + expr.__class__.__name__)
+        if hasattr(expr, 'left') and hasattr(expr, 'right'):
+            print_tree(expr.left, indent + "  ├─ ")
+            print_tree(expr.right, indent + "  └─ ")
+        elif hasattr(expr, 'numerator') and hasattr(expr, 'denominator'):
+            print_tree(expr.numerator, indent + "  ├─ ")
+            print_tree(expr.denominator, indent + "  └─ ")
+        elif hasattr(expr, 'arg'):
+            print_tree(expr.arg, indent + "  └─ ")
+        elif hasattr(expr, 'base') and hasattr(expr, 'exp'):
+            print_tree(expr.base, indent + "  ├─ ")
+            print_tree(expr.exp, indent + "  └─ ")
 
-# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
-__pypackages__/
-
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
-
-# SageMath parsed files
-*.sage.py
-
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Pyre type checker
-.pyre/
-
-# pytype static type analyzer
-.pytype/
-
-# Cython debug symbols
-cython_debug/
-
-# PyCharm
-#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
-#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
-#  and can be added to the global gitignore or merged into this file.  For a more nuclear
-#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
-#.idea/
-
-# Abstra
-# Abstra is an AI-powered process automation framework.
-# Ignore directories containing user credentials, local state, and settings.
-# Learn more at https://abstra.io/docs
-.abstra/
-
-# Visual Studio Code
-#  Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore 
-#  that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
-#  and can be added to the global gitignore or merged into this file. However, if you prefer, 
-#  you could uncomment the following to ignore the enitre vscode folder
-# .vscode/
-
-# Ruff stuff:
-.ruff_cache/
-
-# PyPI configuration file
-.pypirc
-
-# Cursor
-#  Cursor is an AI-powered code editor. `.cursorignore` specifies files/directories to
-#  exclude from AI features like autocomplete and code analysis. Recommended for sensitive data
-#  refer to https://docs.cursor.com/context/ignore-files
-.cursorignore
-.cursorindexingignore
+if __name__ == "__main__":
+    print("=== Символьный дифференциатор ===")
+    print("Пример: x^3 + sin(x) / (x + 1) - ln(x)\n")
+    try:
+        expr_str = input("Введите выражение: ")
+        tokens = tokenize(expr_str)
+        tree = parse(tokens)
+        print("\nСтруктура дерева:")
+        print_tree(tree)
+        print("\nИсходное выражение:")
+        print(tree)
+        diffed = tree.diff()
+        simplified = diffed.simplify()
+        print("\nПроизводная:")
+        print(simplified)
+    except Exception as e:
+        print(f"\n[ОШИБКА] {e}")
